@@ -1,0 +1,6 @@
+*comparison.xlsx
+*comparison.csv
+*.ipynb_checkpoints*
+decision_resolutions/*
+jupyter-google*
+document_pairs.csv
