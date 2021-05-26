@@ -1,0 +1,1 @@
+This directory stores data we don't want to commit to git
