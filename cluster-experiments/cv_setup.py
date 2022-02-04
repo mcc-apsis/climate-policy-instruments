@@ -294,7 +294,11 @@ param_space = list(product_dict(**bert_params))
 def KFoldRandom(n_splits, X, no_test, shuffle=False, discard=True):
     kf = KFold(n_splits=n_splits, shuffle=shuffle)
     for train, test in kf.split(X):
+        X = np.array(X)
+        train = X[train]
+        test = X[test]
         if not discard:
             train = list(train) +  [x for x in test if x in no_test]
         test = [x for x in test if x not in no_test]
-        yield (train, test)
+    yield (train, test)
+
