@@ -1,5 +1,6 @@
 from transformers import BertTokenizer, DistilBertTokenizer, DistilBertForSequenceClassification, TFDistilBertForSequenceClassification, TFBertForSequenceClassification
 from transformers import AutoTokenizer, AutoModel, BertForSequenceClassification, BertTokenizer
+from transformers import RobertaForSequenceClassification, RobertaTokenizer
 import numpy as np
 from sklearn.model_selection import GridSearchCV, cross_val_score, cross_validate, KFold
 from sklearn.metrics import roc_curve, accuracy_score, roc_auc_score, precision_recall_curve, f1_score
@@ -62,7 +63,7 @@ mparameters = [
     }
 ]
 
-def create_train_val(tokenizer, x,y,train,val, tensorflow):
+def create_train_val(tokenizer, x,y,train,val, tensorflow,weights=None):
     if tensorflow:
         import tensorflow as tf
         train_encodings = tokenizer(list(x[train].values),
@@ -88,6 +89,20 @@ def create_train_val(tokenizer, x,y,train,val, tensorflow):
         train_encodings= tokenizer(list(x[train]),truncation=True,padding=True,max_length=512)
         val_encodings = tokenizer(list(x[val]),truncation=True,padding=True,max_length=512)
         import torch
+        class WTDataset(torch.utils.data.Dataset): # Weighted Torch Dataset
+            def __init__(self, encodings, labels, weights):
+                self.encodings = encodings
+                self.labels = labels
+                self.sample_weight = weights
+
+            def __getitem__(self, idx):
+                item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+                item['labels'] = torch.tensor(self.labels[idx],dtype=torch.float32)
+                item['sample_weight'] = torch.tensor(self.sample_weight[idx],dtype=torch.float32)
+                return item
+
+            def __len__(self):
+                return len(self.labels)
         class TDataset(torch.utils.data.Dataset):
             def __init__(self, encodings, labels):
                 self.encodings = encodings
@@ -100,32 +115,47 @@ def create_train_val(tokenizer, x,y,train,val, tensorflow):
 
             def __len__(self):
                 return len(self.labels)
+        if weights is None:
+            train_dataset = TDataset(train_encodings, list(y[train]))
+            val_dataset = TDataset(val_encodings, list(y[val])) 
+        else:
+            train_dataset = WTDataset(train_encodings, list(y[train]),list(weights[train]))
+            val_dataset = WTDataset(val_encodings, list(y[val]),list(weights[train])) 
 
-        train_dataset = TDataset(train_encodings, list(y[train]))
-        val_dataset = TDataset(val_encodings, list(y[val]))        
     return train_dataset, val_dataset, MAX_LEN
-
-
-class BCWTrainer(Trainer):
-    def compute_loss(self, model, inputs, return_outputs=False):
-        labels = inputs.pop("labels")
-        outputs = model(**inputs)
-        logits = outputs.logits
-        cw = torch.tensor(self.class_weight[1])
-        loss_fct = torch.nn.BCEWithLogitsLoss(pos_weight=cw)
-        loss = loss_fct(logits.view(-1, 1),
-                        labels.float().view(-1, 1))
-        return (loss, outputs) if return_outputs else loss
 
 class CWTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("labels")
+        device = torch.device('cuda:0')
+        labels = labels.to(device)
+        
+        if "sample_weight" in inputs.keys():
+            sample_weight = inputs.pop("sample_weight")
+        else:
+            sample_weight = None
         outputs = model(**inputs)
         logits = outputs.logits
-        cw = torch.tensor(self.class_weight[1])
-        loss_fct = torch.nn.BCEWithLogitsLoss(pos_weight=cw)
-        loss = loss_fct(logits.view(-1, model.num_labels),
-                        labels.float().view(-1, model.num_labels))
+        try:
+            logits.get_device()
+        except:
+            logits = logits.to(device)
+        if self.class_weight is not None:
+            cw = torch.tensor(list(self.class_weight.values()))
+            try:
+                cw.get_device()
+            except:
+                cw = cw.to(device)
+        else:
+            cw = None
+        loss_fct = torch.nn.BCEWithLogitsLoss(pos_weight=cw.to(device),reduction='none')
+        loss = loss_fct(logits.to(device),labels.float().to(device))
+        #loss = loss_fct(logits.view(-1, model.num_labels),
+        #                labels.float().view(-1, model.num_labels))
+        if sample_weight is not None:
+            loss = (loss * sample_weight / sample_weight.sum()).sum().mean()
+        else:
+            loss = loss.mean()
         return (loss, outputs) if return_outputs else loss
 
 def init_model(model, params,tensorflow=True):
@@ -153,27 +183,14 @@ def init_model(model, params,tensorflow=True):
             per_device_train_batch_size=params['batch_size'],
             learning_rate=params['learning_rate'],
             weight_decay=params['weight_decay'],
-            fp16=True,
+            #fp16=True,
             gradient_checkpointing=gradient_checkpointing
+        )        
+        trainer = CWTrainer(
+            model=model,
+            args=trainer_args,
         )
-        if params['class_weight'] is not None:
-            if model.num_labels<3:
-                trainer = BCWTrainer(
-                    model=model,
-                    args=trainer_args
-                )
-                trainer.class_weight = params['class_weight']
-            else:
-                trainer = CWTrainer(
-                    model=model,
-                    args=trainer_args,
-                )
-                trainer.class_weight = params['class_weight']
-        else:
-            trainer = Trainer(
-                model=model,
-                args=trainer_args
-            )
+        trainer.class_weight = params['class_weight']
     return model, trainer
 
 def evaluate_preds(y_true, y_pred, targets):
@@ -226,14 +243,26 @@ def train_eval_bert(model_name, params, df, targets, train, test, roundup, retur
         import torch
         tensorflow=False
     else:
-        model = BertForSequenceClassification.from_pretrained(model_name, num_labels=num_labels, cache_dir='transformers')
-        #tokenizer = BertTokenizer.from_pretrained(model_name, cache_dir='transformers')
-        tokenizer= BertTokenizer.from_pretrained('./transformers/transformers/tokenizer')
+        if "roberta" in model_name.lower():
+            model = RobertaForSequenceClassification.from_pretrained(model_name, num_labels=num_labels, cache_dir='transformers')
+            tokenizer= RobertaTokenizer.from_pretrained('./transformers/cbtokenizer')
+        else:
+            model = BertForSequenceClassification.from_pretrained(model_name, num_labels=num_labels, cache_dir='transformers')
+            tokenizer= BertTokenizer.from_pretrained('./transformers/transformers/tokenizer')
         tensorflow=False
         import torch
     
-    
-    train_dataset, val_dataset, MAX_LEN = create_train_val(tokenizer, df['content'].astype(str), df['labels'], train, test, tensorflow)
+    try:
+        device = torch.device('cuda:0')
+        model = model.to(device)
+        print("loaded model to GPU")
+    except:
+        print("could not put model on GPU")
+    if params["sample_weighted"]==1:
+        w = df["sample_weight"]
+    else:
+        w = None
+    train_dataset, val_dataset, MAX_LEN = create_train_val(tokenizer, df['content'].astype(str), df['labels'], train, test, tensorflow, weights=w)
     
     print("training bert with these params")
     print(params)
@@ -275,10 +304,11 @@ def train_eval_bert(model_name, params, df, targets, train, test, roundup, retur
 
 bert_params = {
   "class_weight": [None],
+  "sample_weighted": [True, False],
   "batch_size": [16, 32],
-  "weight_decay": (0, 0.3),
-  "learning_rate": (1e-5, 5e-5),
-  "num_epochs": [2, 3, 4]
+  "weight_decay": (0, 0.1, 0.3),
+  "learning_rate": (1e-5, 2e-5, 3e-5, 5e-5),
+  "num_epochs": [2, 3, 4, 5]
 }
 
 import itertools
@@ -300,5 +330,4 @@ def KFoldRandom(n_splits, X, no_test, shuffle=False, discard=True):
         if not discard:
             train = list(train) +  [x for x in test if x in no_test]
         test = [x for x in test if x not in no_test]
-    yield (train, test)
-
+        yield (train, test)

@@ -11,6 +11,7 @@ parser.add_argument("model_name", type=str)
 parser.add_argument("roundup", type=str)
 parser.add_argument("y_prefix", type=str)
 parser.add_argument("resume", type=str)
+parser.add_argument("make_predictions", type=str)
 
 args = parser.parse_args()
 
@@ -43,23 +44,20 @@ import pickle
 import re
 
 # Load data
-df = pd.read_csv('../data/0_labelled_documents.csv')
+seen_df = pd.read_csv('../data/0_labelled_documents.csv')
 
-df = (df
+seen_df = (seen_df
       .sort_values('id')
       .sample(frac=1, random_state=1)
       .reset_index(drop=True)
 )
 
-if test:
-    print("TESTING WITH 100 documents")
-    df = df.head(150)
-
+weights_df = pd.read_csv('../data/0_label_weights.csv')
 
 # Get the target labels from the y_prefix argument passed to this script
 if len(args.y_prefix) < 2:
     args.y_prefix+=" "
-cols = [x for x in df.columns if re.match(f"^{args.y_prefix}",x)]
+cols = [x for x in seen_df.columns if re.match(f"^{args.y_prefix}",x)]
 print(cols)
 num_labels=len(cols)
 
@@ -69,36 +67,65 @@ num_labels=len(cols)
 # For labels beyond inclusion, we treat all those that are representative of the included
 # studies as representative
 if "INCLUDE" in args.y_prefix:
-    df = df.loc[pd.notna(df[y_var]),:].reset_index(drop=True)
-    df['random'] = df['representative_sample']
+    y_var = cols[0]
+    seen_df = seen_df.loc[pd.notna(seen_df[y_var]),:].reset_index(drop=True)
+    seen_df['random'] = seen_df['representative_sample']
 else:
-    df = df[df['INCLUDE']==1]
-    df['random'] = df['representative_relevant']
+    seen_df = seen_df[seen_df['INCLUDE']==1]
+    seen_df['random'] = seen_df['representative_relevant']
     
 
 # Turn the columns into target variables and get class-weights to counteract class imbalances
 if len(cols)==1:
     y_var = cols[0]
-    df = df.loc[pd.notna(df[y_var]),:].reset_index(drop=True)
-    print(df.shape)
-    df['labels'] = list(df[y_var].values.astype(int))
-    cw = df[(df['random']==1) & (df[y_var]==0)].shape[0] / df[(df['random']==1) & (df[y_var]==1)].shape[0]
-    class_weight={0:1, 1:cw}
+    seen_df = seen_df.loc[pd.notna(seen_df[y_var]),:].reset_index(drop=True)
+    print(seen_df.shape)
+    seen_df['labels'] = list(seen_df[y_var].values.astype(int))
+    cw = seen_df[(seen_df['random']==1) & (seen_df[y_var]==0)].shape[0] / seen_df[(seen_df['random']==1) & (seen_df[y_var]==1)].shape[0]
+    class_weight={1:cw}
     scorer = "F1"
+    weights_df["sample_weight"] = list(weights_df[y_var+"_sample_weight"].fillna(1).values)
 else:
     num_labels = len(cols) 
-    df = df.replace(2,1)
-    df['labels'] = list(df[cols].values.astype(int))
-    df = df.dropna(subset=cols)
-    df = df.reset_index(drop=True)
+    weights_df['sample_weight'] = list(weights_df[[x+"_sample_weight" for x in cols]].fillna(1).values)
+    seen_df = seen_df.replace(2,1)
+    seen_df['labels'] = list(seen_df[cols].values.astype(int))
+    seen_df = seen_df.dropna(subset=cols)
+    seen_df = seen_df.reset_index(drop=True)
     scorer = "F1 macro"
     class_weight = {}
     for i, t in enumerate(cols):
-        cw = df[(df['random']==1) & (df[t]==0)].shape[0] / df[(df['random']==1) & (df[t]==1)].shape[0]
+        cw = seen_df[(seen_df['random']==1) & (seen_df[t]==0)].shape[0] / seen_df[(seen_df['random']==1) & (seen_df[t]==1)].shape[0]
         class_weight[i] = cw
 
+# Remove unneccessary columns
+seen_df = seen_df[["id","title","content","labels","random"]+cols].merge(
+    weights_df[["doc__id","sample_weight"]].rename(columns={"doc__id":"id"})
+)
+
+
+# Merge with the unseen data if necessary
+seen_df['seen']  = 1
+if args.make_predictions=="True":
+    unseen_df = pd.read_csv('../data/0_unlabelled_documents.csv')
+    unseen_df['seen'] = 0
+    df = (pd.concat([seen_df,unseen_df])
+          .sort_values('id')
+          .sample(frac=1, random_state=1)
+          .reset_index(drop=True)
+    )
+    df.content = df.content.astype(str)
+else:
+    df = seen_df
+
 # This is the index of nonrandom/nonrepresentative documents, and these will be removed from validation sets
-nonrandom_index = df[df['random']!=1].index
+nonrandom_index = df[(df['random']!=1) & (df['seen']==1)].index
+random_index = df[df['random']==1].index
+seen_index = df[df['seen']==1].index
+unseen_index = df[df['seen']==0].index
+
+print("seen_index", seen_index)
+print("nonrandom_index", nonrandom_index)
 
 # Try this with tensorflow if this is True, otherwise we do it with pytorch
 try_tf = False
@@ -126,6 +153,7 @@ import cv_setup as cvs
 # Get the BERT parameters, and include class_weight as a parameter to be tested
 bert_params = cvs.bert_params
 bert_params['class_weight'].append(class_weight)
+bert_params['class_weight'] = [class_weight]
 param_space = list(cvs.product_dict(**bert_params))
 params = list(bert_params.keys())
 
@@ -134,10 +162,12 @@ if test:
 
 # Get the spilts for our outer fold, discard=False means to pass the nonrandom documents that
 # would ordinarily be in the validation set back into the test set
-outer_cv = cvs.KFoldRandom(args.n_splits, df.index, nonrandom_index, discard=False)
+outer_cv = cvs.KFoldRandom(args.n_splits, seen_index, nonrandom_index, discard=False)
 
 # Iterate through the folds
 for k, (train, test) in enumerate(outer_cv):    
+    print(len(train), len(test))
+    continue
     if k!=rank_i:
         continue
         # Skip if the fold does not match the job number of this process
@@ -150,7 +180,7 @@ for k, (train, test) in enumerate(outer_cv):
             #continue
             # If we want to be very very parallel then continue here, and increase the number or tasks
         # File name for the results of this split across params
-        fname = f'cv/df_{df.shape[0]}_cv_results_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}_{l}.csv'
+        fname = f'cv/df_{len(seen_index)}_cv_results_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}_{l}.csv'
         # Try to load existing results if resume is true, otherwise initialize new one
         if args.resume=="True":
             try:
@@ -173,9 +203,12 @@ for k, (train, test) in enumerate(outer_cv):
         for pr in param_space:
             if pr in params_tested:
                 continue
-            cv_results.append(cvs.train_eval_bert(args.model_name, pr, df=df, targets=cols, train=l_train, test=l_test, roundup=args.roundup))
+            cv_results.append(cvs.train_eval_bert(
+                args.model_name, pr, df=df, targets=cols, train=l_train, test=l_test, 
+                roundup=args.roundup
+            ))
             cv_df = pd.DataFrame.from_dict(cv_results)
-            cv_df['dataset_size'] = df.shape[0]
+            cv_df['dataset_size'] = len(seen_index)
             cv_df.to_csv(fname,index=False)
             gc.collect()
             if use_tf:
@@ -188,7 +221,7 @@ for k, (train, test) in enumerate(outer_cv):
 
     inner_scores = []
     for l in range(args.n_splits):
-        fname = f'cv/df_{df.shape[0]}_cv_results_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}_{l}.csv'
+        fname = f'cv/df_{len(seen_index)}_cv_results_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}_{l}.csv'
         inner_df = pd.read_csv(fname)
         inner_df = inner_df.sort_values(scorer,ascending=False).reset_index(drop=True)
         inner_scores += inner_df.to_dict('records')
@@ -209,24 +242,93 @@ for k, (train, test) in enumerate(outer_cv):
         best_model['class_weight'] = ast.literal_eval(best_model['class_weight'])
     
     outer_scores, y_preds = cvs.train_eval_bert(args.model_name, best_model, df=df, targets=cols, train=train, test=test, roundup=args.roundup, return_predictions=True)
-
-    fname = f'cv/df_{df.shape[0]}_cv_results_outer_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}.csv'
+    print(y_preds.shape)
+    fname = f'cv/df_{len(seen_index)}_cv_results_outer_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}.csv'
     pd.DataFrame.from_dict([outer_scores]).to_csv(fname, index=False)
-    fname = f'cv/df_{df.shape[0]}_y_preds_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}'
+    fname = f'cv/df_{len(seen_index)}_y_preds_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}'
     np.save(fname,y_preds)
 
-    fname = f'cv/df_{df.shape[0]}_y_pred_ids_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}'
+    fname = f'cv/df_{len(seen_index)}_y_pred_ids_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}'
     np.save(fname,df.loc[test,"id"])
 
-outer_cv = cvs.KFoldRandom(args.n_splits, df.index, [], discard=False)
+    # Now Test each set of parameters on the outer loop for model selection
+    if not args.make_predictions == "True":
+        continue
+
+    inner_scores = []
+    fname = f'cv/df_{len(seen_index)}_model_selection_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}.csv'
+    if args.resume=="True":
+        try:
+            pr = param_space[0]
+            cv_results=pd.read_csv(fname).to_dict('records')
+            cv_df = pd.DataFrame.from_dict(cv_results)
+            params_tested=pd.read_csv(fname)[list(pr.keys())].to_dict('records')
+            for pr in params_tested:
+                if pd.isna(pr["class_weight"]):
+                    pr["class_weight"] = None
+                elif isinstance(pr['class_weight'],str):
+                    pr['class_weight'] = ast.literal_eval(pr['class_weight'])
+        except:
+            cv_results = []
+            params_tested = []
+    else:
+        cv_results = []
+        params_tested = []
+
+    # Test each combination of parameters
+
+    for pr in param_space:
+        if pr in params_tested:
+            continue
+        cv_results.append(cvs.train_eval_bert(args.model_name, pr, df=df, targets=cols, train=train, test=test, roundup=args.roundup))
+        cv_df = pd.DataFrame.from_dict(cv_results)
+        cv_df['dataset_size'] = len(seen_index)
+        cv_df.to_csv(fname,index=False)
+        gc.collect()
+        if use_tf:
+            tf.keras.backend.clear_session()
+        else:
+            torch.cuda.empty_cache()
+        gc.collect()
+
+    cv_df.loc[pd.notna(cv_df['class_weight']),'class_weight'] = cv_df.loc[pd.notna(cv_df['class_weight']),'class_weight'].astype(str)
+    print(cv_df)
+    print(params)
+    print(scorer)
+    # Now select te best combination
+    best_model = (cv_df[pd.notna(cv_df[scorer])]
+                  .groupby(params)[scorer]
+                  .mean()
+                  .sort_values(ascending=False)
+                  .reset_index() 
+                 ).to_dict('records')[0]
+
+    del best_model[scorer]
+    print("Best model from this round: ", best_model)
+    if best_model['class_weight']==-1:
+        best_model['class_weight']=None
+    elif isinstance(best_model['class_weight'],str):
+        best_model['class_weight'] = ast.literal_eval(best_model['class_weight'])
+
+    y_preds = cvs.train_eval_bert(args.model_name, best_model, df=df, targets=cols, train=train, test=unseen_index, evaluate=False, roundup=args.roundup, return_predictions=True)
+
+    fname = f'cv/df_{len(seen_index)}_unseen_y_preds_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}'
+    np.save(fname,y_preds)
+    fname = f'cv/df_{len(seen_index)}_unseen_y_preds_{args.y_prefix}_{args.model_name.replace("/","__")}_pred_ids.csv'
+    df.loc[unseen_index,"id"].to_csv(fname,index=False)
+
+
+
+## Now do the outer loop again but with also including nonrandom docs
+outer_cv = cvs.KFoldRandom(args.n_splits, seen_index, [], discard=False)
 
 for k, (train, test) in enumerate(outer_cv):    
-    if k!=rank_j:
+    if k!=rank_i:
         continue
     inner_scores = []
     for l in range(args.n_splits):
         try:
-            fname = f'cv/df_{df.shape[0]}_cv_results_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}_{l}.csv'
+            fname = f'cv/df_{len(seen_index)}_cv_results_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}_{l}.csv'
             inner_df = pd.read_csv(fname)
         except:
             fname = f'cv/df_master_cv_results_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}_{l}.csv'
@@ -252,11 +354,11 @@ for k, (train, test) in enumerate(outer_cv):
     
     outer_scores, y_preds = cvs.train_eval_bert(args.model_name, best_model, df=df, targets=cols, train=train, test=test, roundup=args.roundup, return_predictions=True)
 
-    fname = f'cv/df_{df.shape[0]}_cv_results_outer_nonrandom_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}.csv'
+    fname = f'cv/df_{len(seen_index)}_cv_results_outer_nonrandom_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}.csv'
     pd.DataFrame.from_dict([outer_scores]).to_csv(fname, index=False)
-    fname = f'cv/df_{df.shape[0]}_y_preds_nonrandom_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}'
+    fname = f'cv/df_{len(seen_index)}_y_preds_nonrandom_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}'
     np.save(fname,y_preds)
-    fname = f'cv/df_{df.shape[0]}_y_pred_nonrandom_ids_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}'
+    fname = f'cv/df_{len(seen_index)}_y_pred_nonrandom_ids_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}'
     np.save(fname,df.loc[test,"id"])
 
 

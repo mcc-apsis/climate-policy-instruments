@@ -1,7 +1,7 @@
 #!/bin/bash
 
 #SBATCH --qos=short
-#SBATCH --time=01:00:00
+#SBATCH --time=00:02:00
 #SBATCH --job-name=inner-bert
 
 #SBATCH --output=out/inner-bert.out
@@ -15,9 +15,13 @@ source activate huggingface-tf
 
 export I_MPI_PMI_LIBRARY=/p/system/slurm/lib/libpmi.so
 
-# n_splits model_name roundup y_prefix resume
-srun --mpi=pmi2 -n 3 inner_bert_cv.py 3 distilbert-base-uncased False "9 - 0. Ex-post" True
+# n_splits model_name roundup y_prefix resume make_predictions
+#srun --mpi=pmi2 -n 3 inner_bert_cv.py 3 distilbert-base-uncased False "9 - 0. Ex-post" True
 #srun --mpi=pmi2 -n 3 inner_bert_cv.py 3 distilbert-base-uncased False "4 -" False 
+
+#srun --mpi=pmi2 -n 3 inner_bert_cv.py 3 climatebert/distilroberta-base-climate-f False INCLUDE True
+srun --mpi=pmi2 -n 3 inner_bert_cv.py 3 climatebert/distilroberta-base-climate-f False "4 -" True False
+
 
 #srun --mpi=pmi2 -n 3 inner_bert_cv.py 3 distilbert-base-uncased False INCLUDE False 
 
