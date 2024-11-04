@@ -1,7 +1,7 @@
 #!/bin/bash
 
-#SBATCH --qos=short
-#SBATCH --time=00:02:00
+#SBATCH --qos=medium
+#SBATCH --time=40:00:00
 #SBATCH --job-name=inner-bert
 
 #SBATCH --output=out/inner-bert.out
@@ -20,7 +20,7 @@ export I_MPI_PMI_LIBRARY=/p/system/slurm/lib/libpmi.so
 #srun --mpi=pmi2 -n 3 inner_bert_cv.py 3 distilbert-base-uncased False "4 -" False 
 
 #srun --mpi=pmi2 -n 3 inner_bert_cv.py 3 climatebert/distilroberta-base-climate-f False INCLUDE True
-srun --mpi=pmi2 -n 3 inner_bert_cv.py 3 climatebert/distilroberta-base-climate-f False "4 -" True False
+srun --mpi=pmi2 -n 3 inner_bert_cv.py 3 climatebert/distilroberta-base-climate-f False "4 -" False False
 
 
 #srun --mpi=pmi2 -n 3 inner_bert_cv.py 3 distilbert-base-uncased False INCLUDE False 

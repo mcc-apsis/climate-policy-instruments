@@ -167,7 +167,6 @@ outer_cv = cvs.KFoldRandom(args.n_splits, seen_index, nonrandom_index, discard=F
 # Iterate through the folds
 for k, (train, test) in enumerate(outer_cv):    
     print(len(train), len(test))
-    continue
     if k!=rank_i:
         continue
         # Skip if the fold does not match the job number of this process
@@ -201,6 +200,7 @@ for k, (train, test) in enumerate(outer_cv):
             
         # train and validate a model for each combination of parameters
         for pr in param_space:
+            
             if pr in params_tested:
                 continue
             cv_results.append(cvs.train_eval_bert(
@@ -241,6 +241,8 @@ for k, (train, test) in enumerate(outer_cv):
     else:
         best_model['class_weight'] = ast.literal_eval(best_model['class_weight'])
     
+    print("Outer loop, training model with best hyperparameters from inner loop")
+    print(len(train), len(test))
     outer_scores, y_preds = cvs.train_eval_bert(args.model_name, best_model, df=df, targets=cols, train=train, test=test, roundup=args.roundup, return_predictions=True)
     print(y_preds.shape)
     fname = f'cv/df_{len(seen_index)}_cv_results_outer_{args.y_prefix}_{args.model_name.replace("/","__")}_{k}.csv'

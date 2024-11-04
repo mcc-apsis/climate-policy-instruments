@@ -1,5 +1,6 @@
 from transformers import BertTokenizer, DistilBertTokenizer, DistilBertForSequenceClassification, TFDistilBertForSequenceClassification, TFBertForSequenceClassification
 from transformers import AutoTokenizer, AutoModel, BertForSequenceClassification, BertTokenizer
+from transformers import PreTrainedTokenizerFast
 from transformers import RobertaForSequenceClassification, RobertaTokenizer
 import numpy as np
 from sklearn.model_selection import GridSearchCV, cross_val_score, cross_validate, KFold
@@ -128,7 +129,7 @@ class CWTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False):
         labels = inputs.pop("labels")
         device = torch.device('cuda:0')
-        labels = labels.to(device)
+        #labels = labels.to(device)
         
         if "sample_weight" in inputs.keys():
             sample_weight = inputs.pop("sample_weight")
@@ -137,19 +138,29 @@ class CWTrainer(Trainer):
         outputs = model(**inputs)
         logits = outputs.logits
         try:
-            logits.get_device()
+            logits#.get_device()
         except:
-            logits = logits.to(device)
+            logits = logits#.to(device)
         if self.class_weight is not None:
             cw = torch.tensor(list(self.class_weight.values()))
             try:
-                cw.get_device()
+                cw#.get_device()
             except:
-                cw = cw.to(device)
+                cw = cw#.to(device)
         else:
             cw = None
-        loss_fct = torch.nn.BCEWithLogitsLoss(pos_weight=cw.to(device),reduction='none')
-        loss = loss_fct(logits.to(device),labels.float().to(device))
+        loss_fct = torch.nn.BCEWithLogitsLoss(
+            pos_weight=cw,#.to(device),
+            reduction='none'
+        )
+        print(logits.shape, labels.shape)
+        if len(labels.float().shape) < len(logits.shape):
+            logits = logits[:,1]
+
+        loss = loss_fct(
+            logits,#.to(device),
+            labels#.to(device)
+        )
         #loss = loss_fct(logits.view(-1, model.num_labels),
         #                labels.float().view(-1, model.num_labels))
         if sample_weight is not None:
@@ -193,42 +204,61 @@ def init_model(model, params,tensorflow=True):
         trainer.class_weight = params['class_weight']
     return model, trainer
 
-def evaluate_preds(y_true, y_pred, targets):
+def evaluate_preds(y_true, y_pred, targets, w=None, t=0.5):
     if len(targets)==1:
         try:
             roc_auc = roc_auc_score(y_true, y_pred)
         except:
             roc_auc = np.NaN
-        f1 = f1_score(y_true, y_pred.round())
-        p, r = precision_score(y_true, y_pred.round()), recall_score(y_true, y_pred.round())
-        acc = accuracy_score(y_true, y_pred.round())
+        if t==0.5:
+            y_pred_binary = y_pred.round()
+        else:
+            y_pred_binary = np.where(y_pred>t[0],1,0)
+            
+        f1 = f1_score(y_true, y_pred_binary)
+        p, r = precision_score(y_true, y_pred_binary), recall_score(y_true, y_pred_binary)
+        acc = accuracy_score(y_true, y_pred_binary)
         print(f"ROC AUC: {roc_auc:.0%}, F1: {f1:.1%}, precision: {p:.1%}, recall {r:.1%}, acc {acc:.0%}")
         return {"ROC AUC": roc_auc, "F1": f1, "precision": p, "recall": r, "accuracy": acc}
     else:
+        if t==0.5:
+            y_pred_binary = y_pred.round()
+        else:
+            y_pred_binary = y_pred
+            for label_i, t_k in enumerate(t):
+                y_pred_binary[:,label_i] = np.where(y_pred[:,label_i]>t_k,1,0)
         res = {}
         for average in ["micro","macro","weighted", "samples"]:
             try:
                 res[f'ROC AUC {average}'] = roc_auc_score(y_true, y_pred, average=average)
             except:
                 res[f'ROC AUC {average}'] = np.NaN
-            res[f'F1 {average}'] = f1_score(y_true, y_pred.round(), average=average)
-            res[f'precision {average}'] = precision_score(y_true, y_pred.round(), average=average)
-            res[f'recall {average}'] = recall_score(y_true, y_pred.round(), average=average)
+            res[f'F1 {average}'] = f1_score(y_true, y_pred_binary, average=average)
+            res[f'precision {average}'] = precision_score(y_true, y_pred_binary, average=average)
+            res[f'recall {average}'] = recall_score(y_true, y_pred_binary, average=average)
 
         for i, target in enumerate(targets):
             try:
                 res[f'ROC AUC - {target}'] = roc_auc_score(y_true[:,i], y_pred[:,i])
             except:
                 res[f'ROC AUC - {target}'] = np.NaN
-            res[f'precision - {target}'] = precision_score(y_true[:,i], y_pred[:,i].round())
-            res[f'recall - {target}'] = recall_score(y_true[:,i], y_pred[:,i].round())
-            res[f'F1 - {target}'] = f1_score(y_true[:,i], y_pred[:,i].round())
-            res[f'accuracy - {target}'] = accuracy_score(y_true[:,i], y_pred[:,i].round())
+            
+            res[f'precision - {target}'] = precision_score(y_true[:,i], y_pred_binary[:,i])
+            res[f'recall - {target}'] = recall_score(y_true[:,i], y_pred_binary[:,i])
+            res[f'F1 - {target}'] = f1_score(y_true[:,i], y_pred_binary[:,i])
+            res[f'accuracy - {target}'] = accuracy_score(y_true[:,i], y_pred_binary[:,i])
             res[f'n_target - {target}'] = y_true[:,i].sum()
+            if w is not None:
+                res[f'precision - {target} - sw'] = precision_score(y_true[:,i], y_pred_binary[:,i], sample_weight=w[:,i])
+                res[f'recall - {target} - sw'] = recall_score(y_true[:,i], y_pred_binary[:,i], sample_weight=w[:,i])
+                res[f'F1 - {target} - sw'] = f1_score(y_true[:,i], y_pred_binary[:,i], sample_weight=w[:,i])
+                res[f'accuracy - {target} - sw'] = accuracy_score(y_true[:,i], y_pred_binary[:,i], sample_weight=w[:,i])
 
+        if w is not None:
+            res['F1 macro sample_weighted'] = np.mean([res[x] for x in res if 'F1 -' in x and "- sw" in x])
         return res        
 
-def train_eval_bert(model_name, params, df, targets, train, test, roundup, return_predictions=False, evaluate=True):
+def train_eval_bert(model_name, params, df, targets, train, test, roundup, return_predictions=False, evaluate=True, threshold=0.5):
 
     num_labels = min([2,len(targets)])
     num_labels = len(targets)
@@ -240,12 +270,16 @@ def train_eval_bert(model_name, params, df, targets, train, test, roundup, retur
         #import tensorflow as tf
         #import tensorflow_addons as tfa
         model = DistilBertForSequenceClassification.from_pretrained(model_name, num_labels=num_labels, cache_dir='transformers')
+        model = DistilBertForSequenceClassification.from_pretrained(model_name, num_labels=num_labels, cache_dir='transformers')
         import torch
         tensorflow=False
     else:
         if "roberta" in model_name.lower():
             model = RobertaForSequenceClassification.from_pretrained(model_name, num_labels=num_labels, cache_dir='transformers')
-            tokenizer= RobertaTokenizer.from_pretrained('./transformers/cbtokenizer')
+            try:
+                tokenizer= RobertaTokenizer.from_pretrained('./transformers/cbtokenizer')
+            except:
+                tokenizer = RobertaTokenizer.from_pretrained(model_name)
         else:
             model = BertForSequenceClassification.from_pretrained(model_name, num_labels=num_labels, cache_dir='transformers')
             tokenizer= BertTokenizer.from_pretrained('./transformers/transformers/tokenizer')
@@ -294,7 +328,12 @@ def train_eval_bert(model_name, params, df, targets, train, test, roundup, retur
         np.put_along_axis(y_pred, ai, maximums.reshape(ai.shape), axis=1)
     if not evaluate:
         return y_pred
-    eps = evaluate_preds(np.array(df.loc[test,targets]), y_pred, targets)
+    if w is not None:
+        w = np.stack(w)
+        print(w)
+        print(test)
+        w = w[test,:]
+    eps = evaluate_preds(np.array(df.loc[test,targets]), y_pred, targets, w, t=threshold)
     print(eps)
     for key, value in params.items():
         eps[key] = value
@@ -307,8 +346,8 @@ bert_params = {
   "sample_weighted": [True, False],
   "batch_size": [16, 32],
   "weight_decay": (0, 0.1, 0.3),
-  "learning_rate": (1e-5, 2e-5, 3e-5, 5e-5),
-  "num_epochs": [2, 3, 4, 5]
+    "learning_rate":  (2e-5, 3e-5, 5e-5, 7e-5),
+    "num_epochs": [4, 5, 6, 7, 8]
 }
 
 import itertools

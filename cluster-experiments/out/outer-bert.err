@@ -1,0 +1,46 @@
+2021-11-24 19:45:55.934661: W tensorflow/stream_executor/platform/default/dso_loader.cc:64] Could not load dynamic library 'libcudart.so.11.0'; dlerror: libcudart.so.11.0: cannot open shared object file: No such file or directory; LD_LIBRARY_PATH: /home/maxcall/.conda/envs/huggingface-tf/lib/libfabric:
+2021-11-24 19:45:55.934685: I tensorflow/stream_executor/cuda/cudart_stub.cc:29] Ignore above cudart dlerror if you do not have a GPU set up on your machine.
+2021-11-24 19:45:56.208508: W tensorflow/stream_executor/platform/default/dso_loader.cc:64] Could not load dynamic library 'libcudart.so.11.0'; dlerror: libcudart.so.11.0: cannot open shared object file: No such file or directory; LD_LIBRARY_PATH: /home/maxcall/.conda/envs/huggingface-tf/lib/libfabric:
+2021-11-24 19:45:56.208606: W tensorflow/stream_executor/platform/default/dso_loader.cc:64] Could not load dynamic library 'libcudart.so.11.0'; dlerror: libcudart.so.11.0: cannot open shared object file: No such file or directory; LD_LIBRARY_PATH: /home/maxcall/.conda/envs/huggingface-tf/lib/libfabric:
+2021-11-24 19:45:56.208654: I tensorflow/stream_executor/cuda/cudart_stub.cc:29] Ignore above cudart dlerror if you do not have a GPU set up on your machine.
+2021-11-24 19:45:56.208687: I tensorflow/stream_executor/cuda/cudart_stub.cc:29] Ignore above cudart dlerror if you do not have a GPU set up on your machine.
+Traceback (most recent call last):
+  File "./outer_bert_cv.py", line 129, in <module>
+    inner_df = pd.read_csv(fname)
+  File "/home/maxcall/.conda/envs/huggingface-tf/lib/python3.6/site-packages/pandas/io/parsers.py", line 688, in read_csv
+    return _read(filepath_or_buffer, kwds)
+  File "/home/maxcall/.conda/envs/huggingface-tf/lib/python3.6/site-packages/pandas/io/parsers.py", line 454, in _read
+    parser = TextFileReader(fp_or_buf, **kwds)
+  File "/home/maxcall/.conda/envs/huggingface-tf/lib/python3.6/site-packages/pandas/io/parsers.py", line 948, in __init__
+    self._make_engine(self.engine)
+  File "/home/maxcall/.conda/envs/huggingface-tf/lib/python3.6/site-packages/pandas/io/parsers.py", line 1180, in _make_engine
+    self._engine = CParserWrapper(self.f, **self.options)
+  File "/home/maxcall/.conda/envs/huggingface-tf/lib/python3.6/site-packages/pandas/io/parsers.py", line 2010, in __init__
+    self._reader = parsers.TextReader(src, **kwds)
+  File "pandas/_libs/parsers.pyx", line 382, in pandas._libs.parsers.TextReader.__cinit__
+  File "pandas/_libs/parsers.pyx", line 674, in pandas._libs.parsers.TextReader._setup_parser_source
+FileNotFoundError: [Errno 2] No such file or directory: 'cv/df_2512_cv_results_INCLUDE_allenai__scibert_scivocab_uncased_2_0.csv'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "./outer_bert_cv.py", line 132, in <module>
+    inner_df = pd.read_csv(fname)
+  File "/home/maxcall/.conda/envs/huggingface-tf/lib/python3.6/site-packages/pandas/io/parsers.py", line 688, in read_csv
+    return _read(filepath_or_buffer, kwds)
+  File "/home/maxcall/.conda/envs/huggingface-tf/lib/python3.6/site-packages/pandas/io/parsers.py", line 454, in _read
+    parser = TextFileReader(fp_or_buf, **kwds)
+  File "/home/maxcall/.conda/envs/huggingface-tf/lib/python3.6/site-packages/pandas/io/parsers.py", line 948, in __init__
+    self._make_engine(self.engine)
+  File "/home/maxcall/.conda/envs/huggingface-tf/lib/python3.6/site-packages/pandas/io/parsers.py", line 1180, in _make_engine
+    self._engine = CParserWrapper(self.f, **self.options)
+  File "/home/maxcall/.conda/envs/huggingface-tf/lib/python3.6/site-packages/pandas/io/parsers.py", line 2010, in __init__
+    self._reader = parsers.TextReader(src, **kwds)
+  File "pandas/_libs/parsers.pyx", line 382, in pandas._libs.parsers.TextReader.__cinit__
+  File "pandas/_libs/parsers.pyx", line 674, in pandas._libs.parsers.TextReader._setup_parser_source
+FileNotFoundError: [Errno 2] No such file or directory: 'cv/df_master_cv_results_INCLUDE_allenai__scibert_scivocab_uncased_2_0.csv'
+srun: error: cs-f04c01b09: task 2: Exited with exit code 1
+srun: Terminating job step 21340182.0
+slurmstepd: error: *** STEP 21340182.0 ON cs-f04c01b04 CANCELLED AT 2021-11-24T19:45:59 ***
+srun: error: cs-f04c01b04: tasks 0-1: Terminated
+srun: Force Terminated job step 21340182.0
